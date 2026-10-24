@@ -148,8 +148,23 @@ export const useDoto = create<DotoState>()((set, get) => {
     const opened = await load()
     if (request !== navigation) return
     if (get().dirty) await persist()
-    applyLibrary(opened.library)
-    if (request === navigation) set({ tab: opened.tab, dirty: false })
+    if (request !== navigation) return
+    const library = opened.library
+    set({
+      saves: library.saves,
+      activeSaveId: library.activeSaveId,
+      archive: library.archive,
+      theme: library.theme,
+      autoSave: library.autoSave,
+      autoSaveMinutes: library.autoSaveMinutes,
+      statusBar: library.statusBar,
+      dock: library.dock,
+      keybinds: library.keybinds,
+      tab: opened.tab,
+      dirty: false,
+      saveFailed: false
+    })
+    armAutoSave()
   }
 
   return {

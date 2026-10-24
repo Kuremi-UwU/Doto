@@ -161,6 +161,7 @@ export function createSave(): Promise<Opened> {
   return serialized(async () => {
     const lib = await ensureLibrary()
     const save = emptySave()
+    save.title = nextSaveTitle(lib.saves)
     const tab = await addTab(save)
     lib.saves.push(save)
     lib.activeSaveId = save.id
@@ -283,6 +284,7 @@ export function deleteSave(id: string): Promise<Opened> {
     lib.saves.splice(index, 1)
     if (lib.saves.length === 0) {
       const fresh = emptySave()
+      fresh.title = nextSaveTitle(lib.saves)
       await addTab(fresh)
       lib.saves.push(fresh)
     }
@@ -664,6 +666,7 @@ async function ensureLibrary(): Promise<Library> {
   await purgeArchive(lib)
   if (lib.saves.length === 0) {
     const save = emptySave()
+    save.title = nextSaveTitle(lib.saves)
     await addTab(save)
     lib.saves.push(save)
   }
@@ -763,6 +766,14 @@ async function purgeArchive(lib: Library): Promise<void> {
 
 function emptySave(): SaveSummary {
   return { id: randomUUID(), title: UNTITLED, tabs: [], activeTabId: '', updatedAt: Date.now(), exportDir: null, exportFiles: {} }
+}
+
+/** The next free "Untitled 1", "Untitled 2", and so on. */
+function nextSaveTitle(saves: Array<{ title: string }>): string {
+  const used = new Set(saves.map((save) => save.title.trim().toLowerCase()))
+  let number = 1
+  while (used.has(`${UNTITLED} ${number}`.toLowerCase())) number += 1
+  return `${UNTITLED} ${number}`
 }
 
 async function addTab(save: SaveSummary): Promise<Tab> {

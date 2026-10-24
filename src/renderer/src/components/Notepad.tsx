@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import type { TextFrame } from '../../../shared/types'
 import { cx } from '../cx'
@@ -20,6 +20,7 @@ interface NotepadProps {
 }
 
 export default function Notepad({ adjusting, onEditorChange }: NotepadProps): React.JSX.Element {
+  const tabId = useDoto((state) => state.tab?.id)
   const savedFrame = useDoto((state) => state.tab?.textFrame ?? null)
   const setTextFrame = useDoto((state) => state.setTextFrame)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -50,6 +51,21 @@ export default function Notepad({ adjusting, onEditorChange }: NotepadProps): Re
   })
 
   editorRef.current = editor
+
+  const shownTab = useRef<string | undefined>(undefined)
+  useLayoutEffect(() => {
+    if (!editor || editor.isDestroyed || !tabId || shownTab.current === tabId) return
+    shownTab.current = tabId
+    const stored = useDoto.getState().tab?.content ?? null
+    const next = withMediaIds(stored)
+    const current = editor.getJSON()
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
+    if (next) {
+      if (!notesMatch(next, current)) editor.commands.setContent(next, { emitUpdate: false })
+      return
+    }
+    if (!notesMatch(null, current)) editor.commands.setContent({ type: 'doc', content: [{ type: 'paragraph' }] }, { emitUpdate: false })
+  }, [editor, tabId])
 
   useEffect(() => {
     if (!editor) return undefined

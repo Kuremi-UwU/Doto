@@ -148,7 +148,7 @@ export default function App(): React.JSX.Element {
       <TopBar />
       <ConfirmDialog />
       <main className="canvas">
-        <Notepad key={tabId} adjusting={adjusting} onEditorChange={setEditor} />
+        <Notepad adjusting={adjusting} onEditorChange={setEditor} />
         <div className="module-layer" ref={setLayer}>
           {bounds &&
             modules.map((module) => (

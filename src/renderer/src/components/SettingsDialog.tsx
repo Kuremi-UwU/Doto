@@ -209,17 +209,24 @@ function GeneralSettings({ onClose }: { onClose: () => void }): React.JSX.Elemen
   )
 }
 
-/** Light and Dark are neutral themes, so the bar uses their paper color. Every other theme uses its accent. */
+/** Light and Dark are neutral themes, so the bar uses their paper color. A pastel pair shares one hue: Light is the accent, Dark is that same color deepened. */
 function themeBarStyle(value: Theme): React.CSSProperties {
   const option = THEME_SWATCHES[value]
   if (value === 'light' || value === 'dark') {
     return { backgroundColor: option.ground, color: option.text, borderColor: option.border }
   }
-  return {
-    backgroundColor: option.accent,
-    color: value.endsWith('-dark') ? option.ground : '#ffffff',
-    borderColor: option.accent
-  }
+  const accent = value.endsWith('-dark') ? THEME_SWATCHES[value.replace(/-dark$/, '-light') as Theme].accent : option.accent
+  const background = value.endsWith('-dark') ? shade(accent, 0.62) : accent
+  return { backgroundColor: background, color: '#ffffff', borderColor: background }
+}
+
+function shade(hex: string, amount: number): string {
+  const value = hex.replace('#', '')
+  const channel = (start: number): string =>
+    Math.round(Number.parseInt(value.slice(start, start + 2), 16) * amount)
+      .toString(16)
+      .padStart(2, '0')
+  return `#${channel(0)}${channel(2)}${channel(4)}`
 }
 
 function ThemePicker({ theme, onChange }: { theme: Theme; onChange: (theme: Theme) => void }): React.JSX.Element {
