@@ -3,6 +3,7 @@ import { NodeSelection, Plugin, PluginKey, TextSelection, type EditorState, type
 import type { EditorView } from '@tiptap/pm/view'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { FontFamily, FontSize, TextStyle } from '@tiptap/extension-text-style'
+import { Color } from '@tiptap/extension-text-style/color'
 import Image from '@tiptap/extension-image'
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table'
 import Youtube from '@tiptap/extension-youtube'
@@ -40,6 +41,7 @@ export function createExtensions(placeholder: string) {
     TextStyle,
     FontFamily,
     FontSize,
+    Color,
     Image.configure({
       inline: true,
       resize: { enabled: true, alwaysPreserveAspectRatio: true, minWidth: 80, minHeight: 40 }

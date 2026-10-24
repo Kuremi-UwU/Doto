@@ -220,6 +220,7 @@ function markOptions(marks: unknown): Record<string, unknown> {
     if (mark.type === 'code') options.font = 'Courier New'
     if (mark.type === 'textStyle' && isRecord(mark.attrs)) {
       if (typeof mark.attrs.fontFamily === 'string' && mark.attrs.fontFamily) options.font = mark.attrs.fontFamily
+      if (typeof mark.attrs.color === 'string' && mark.attrs.color.startsWith('#')) options.color = mark.attrs.color.slice(1)
       const size = typeof mark.attrs.fontSize === 'string' ? Number.parseFloat(mark.attrs.fontSize) : Number.NaN
       if (Number.isFinite(size)) options.size = Math.round(size * 1.5)
     }
