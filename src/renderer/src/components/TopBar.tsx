@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Check, ChevronDown, CircleAlert, Folder, Plus, Settings, Trash, X } from 'lucide-react'
 import { ARCHIVE_DAYS, MODULE_COLORS, type ModuleColor } from '../../../shared/types'
 import { tabHasInformation } from '../../../shared/stats'
@@ -61,8 +62,15 @@ function SaveSwitcher(): React.JSX.Element {
   const popover = usePopover()
   const [menu, setMenu] = useState(false)
   const [editing, setEditing] = useState(false)
+  const clickTimer = useRef<number | null>(null)
   const save = saves.find((entry) => entry.id === activeSaveId) ?? saves[0]
   const recent = useMemo(() => [...saves].sort((a, b) => b.updatedAt - a.updatedAt), [saves])
+
+  useEffect(() => {
+    return () => {
+      if (clickTimer.current) window.clearTimeout(clickTimer.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!menu) return undefined
@@ -103,10 +111,27 @@ function SaveSwitcher(): React.JSX.Element {
         className={cx('topbar__button save-name', popover.open && 'is-open')}
         aria-haspopup="menu"
         aria-expanded={popover.open}
-        title="Saves. Right-click to rename or delete."
-        onClick={popover.toggle}
+        title="Click to switch saves. Double-click to rename. Right-click to rename or delete."
+        onClick={() => {
+          if (clickTimer.current) window.clearTimeout(clickTimer.current)
+          clickTimer.current = window.setTimeout(() => {
+            clickTimer.current = null
+            setMenu(false)
+            popover.toggle()
+          }, 200)
+        }}
+        onDoubleClick={(event) => {
+          event.preventDefault()
+          if (clickTimer.current) window.clearTimeout(clickTimer.current)
+          clickTimer.current = null
+          popover.close()
+          setMenu(false)
+          setEditing(true)
+        }}
         onContextMenu={(event) => {
           event.preventDefault()
+          if (clickTimer.current) window.clearTimeout(clickTimer.current)
+          clickTimer.current = null
           popover.close()
           setMenu(true)
         }}
@@ -196,6 +221,25 @@ function TabStrip(): React.JSX.Element {
   const save = saves.find((entry) => entry.id === activeSaveId)
   const [dragId, setDragId] = useState<string | null>(null)
   const [over, setOver] = useState<number | null>(null)
+  const [menuId, setMenuId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!menuId) return undefined
+    const close = (): void => setMenuId(null)
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') close()
+    }
+    const timer = window.setTimeout(() => document.addEventListener('pointerdown', close), 0)
+    window.addEventListener('keydown', onKey)
+    const strip = document.querySelector('.tabstrip')
+    strip?.addEventListener('scroll', close)
+    return () => {
+      window.clearTimeout(timer)
+      document.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', onKey)
+      strip?.removeEventListener('scroll', close)
+    }
+  }, [menuId])
 
   const move = (to: number): void => {
     if (!save || !dragId) return
@@ -239,6 +283,9 @@ function TabStrip(): React.JSX.Element {
             setDragId(null)
             setOver(null)
           }}
+          menu={menuId === tab.id}
+          onOpenMenu={() => setMenuId(tab.id)}
+          onCloseMenu={() => setMenuId((current) => (current === tab.id ? null : current))}
           onDragOver={(event) => {
             const box = event.currentTarget.getBoundingClientRect()
             setOver(event.clientX < box.left + box.width / 2 ? index : index + 1)
@@ -264,7 +311,10 @@ function NoteTab({
   onOpen,
   onDragStart,
   onDragEnd,
-  onDragOver
+  onDragOver,
+  menu,
+  onOpenMenu,
+  onCloseMenu
 }: {
   id: string
   title: string
@@ -277,6 +327,9 @@ function NoteTab({
   onDragStart: () => void
   onDragEnd: () => void
   onDragOver: (event: React.DragEvent<HTMLDivElement>) => void
+  menu: boolean
+  onOpenMenu: () => void
+  onCloseMenu: () => void
 }): React.JSX.Element {
   const renameTab = useDoto((state) => state.renameTab)
   const archiveTab = useDoto((state) => state.archiveTab)
@@ -294,22 +347,25 @@ function NoteTab({
         // The save still drops a blank note instead of putting it in the trash.
       }
       askConfirm({
-        title: 'Archive this tab?',
-        message: `${title} moves to the archive for 7 days. You can restore it from there.`,
-        confirmLabel: 'Archive',
+        title: `Delete ${title}?`,
+        message: `It moves to the trash for ${ARCHIVE_DAYS} days. You can restore it from there.`,
+        confirmLabel: 'Delete',
         run: () => void archiveTab(id)
       })
     })()
   }
   const [editing, setEditing] = useState(false)
-  const [menu, setMenu] = useState(false)
+  const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null)
 
-  useEffect(() => {
-    if (!menu) return undefined
-    const close = (): void => setMenu(false)
-    document.addEventListener('pointerdown', close)
-    return () => document.removeEventListener('pointerdown', close)
-  }, [menu])
+  const openMenu = (event: React.MouseEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = event.currentTarget.getBoundingClientRect()
+    const width = 200
+    setMenuAt({ top: rect.bottom + 4, left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) })
+    onOpenMenu()
+    if (!active) onOpen()
+  }
 
   if (editing && active) {
     return (
@@ -336,13 +392,17 @@ function NoteTab({
         onDragOver(event)
       }}
       onDragEnd={onDragEnd}
+      onPointerDown={(event) => {
+        if (event.button === 2) openMenu(event)
+      }}
+      onContextMenu={openMenu}
     >
       <button
         type="button"
         role="tab"
         aria-selected={active}
         className="tab__label"
-        title="Drag to rearrange"
+        title="Drag to rearrange. Right-click to rename or delete."
         draggable
         onDragStart={(event) => {
           event.dataTransfer.effectAllowed = 'move'
@@ -353,31 +413,31 @@ function NoteTab({
         onDoubleClick={() => {
           if (active) setEditing(true)
         }}
-        onContextMenu={(event) => {
-          event.preventDefault()
-          onOpen()
-          setMenu(true)
-        }}
       >
         {title}
       </button>
       <button
         type="button"
         className="tab__close"
-        aria-label={`Archive ${title}`}
-        title="Move to archive"
+        aria-label={`Delete ${title}`}
+        title="Delete"
         onClick={archive}
       >
         <X size={13} />
       </button>
-      {menu && (
-        <div className="menu tab__menu" role="menu" onPointerDown={(event) => event.stopPropagation()}>
+      {menu && menuAt && createPortal(
+        <div
+          className="menu tab__menu"
+          role="menu"
+          style={{ position: 'fixed', top: menuAt.top, left: menuAt.left, zIndex: 80 }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
           <button
             type="button"
             role="menuitem"
             className="menu__item"
             onClick={() => {
-              setMenu(false)
+              onCloseMenu()
               setEditing(true)
             }}
           >
@@ -386,13 +446,13 @@ function NoteTab({
           <button
             type="button"
             role="menuitem"
-            className="menu__item"
+            className="menu__item menu__item--danger"
             onClick={() => {
-              setMenu(false)
+              onCloseMenu()
               archive()
             }}
           >
-            <span className="menu__label">Move to archive</span>
+            <span className="menu__label">Delete</span>
           </button>
           <div className="menu__heading">Color</div>
           <div className="color-menu">
@@ -407,12 +467,13 @@ function NoteTab({
                 className={cx('color-swatch', `color-swatch--${entry}`, entry === color && 'is-active')}
                 onClick={() => {
                   useDoto.getState().setTabColor(id, entry)
-                  setMenu(false)
+                  onCloseMenu()
                 }}
               />
             ))}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )
