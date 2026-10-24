@@ -14,7 +14,18 @@ const STYLES = [
   { id: 'p', label: 'Body', short: 'Body' }
 ] as const
 
-type MenuName = 'style' | 'list' | 'table' | 'link' | 'edit-table'
+const TEXT_COLORS = [
+  { label: 'Rose', value: '#c2456f' },
+  { label: 'Red', value: '#cf4239' },
+  { label: 'Peach', value: '#c45a28' },
+  { label: 'Amber', value: '#a16207' },
+  { label: 'Matcha', value: '#3f6f20' },
+  { label: 'Cyan', value: '#086577' },
+  { label: 'Blue', value: '#3a4ec4' },
+  { label: 'Violet', value: '#5b3fb0' }
+] as const
+
+type MenuName = 'style' | 'list' | 'table' | 'link' | 'edit-table' | 'color'
 
 /** Compact formatting bar: headings, lists, and tables open as menus. */
 export default function NoteFormatBar({ editor }: { editor: Editor | null }): React.JSX.Element | null {
@@ -32,6 +43,7 @@ export default function NoteFormatBar({ editor }: { editor: Editor | null }): Re
             href: (editor.getAttributes('link').href as string | undefined) ?? '',
             family: (editor.getAttributes('textStyle').fontFamily as string | undefined) ?? '',
             size: (editor.getAttributes('textStyle').fontSize as string | undefined) ?? '',
+            color: (editor.getAttributes('textStyle').color as string | undefined) ?? '',
             level: ([1, 2, 3, 4, 5, 6] as const).find((level) => editor.isActive('heading', { level })) ?? null,
             align: (editor.isActive('heading') ? editor.getAttributes('heading').textAlign : editor.getAttributes('paragraph').textAlign) || 'left'
           }
@@ -81,6 +93,12 @@ export default function NoteFormatBar({ editor }: { editor: Editor | null }): Re
       }
     }
     setMenu(null)
+  }
+  const applyColor = (value: string, keepOpen = false): void => {
+    const chain = editor.chain().focus()
+    if (value) chain.setColor(value).run()
+    else chain.unsetColor().run()
+    if (!keepOpen) setMenu(null)
   }
 
   return (
@@ -217,6 +235,57 @@ export default function NoteFormatBar({ editor }: { editor: Editor | null }): Re
           </option>
         ))}
       </select>
+      <div className="format-pop">
+        <button
+          type="button"
+          className={cx('format-bar__color', menu === 'color' && 'is-open')}
+          title="Text color"
+          aria-label="Text color"
+          aria-haspopup="menu"
+          aria-expanded={menu === 'color'}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => toggle('color')}
+        >
+          <span className="format-bar__color-letter">A</span>
+          <span className="format-bar__color-bar" style={{ background: active.color || 'currentColor' }} />
+        </button>
+        {menu === 'color' && (
+          <div
+            className="format-menu format-menu--colors"
+            role="menu"
+            onMouseDown={(event) => {
+              if ((event.target as HTMLElement).closest('input')) return
+              event.preventDefault()
+            }}
+          >
+            <button type="button" className={cx('format-menu__item', !active.color && 'is-active')} onClick={() => applyColor('')}>
+              Default
+            </button>
+            <div className="color-choices">
+              {TEXT_COLORS.map((entry) => (
+                <button
+                  key={entry.value}
+                  type="button"
+                  className={cx('color-choice', active.color.toLowerCase() === entry.value && 'is-active')}
+                  style={{ background: entry.value }}
+                  title={entry.label}
+                  aria-label={entry.label}
+                  onClick={() => applyColor(entry.value)}
+                />
+              ))}
+            </div>
+            <label className="format-menu__item format-color-custom">
+              Custom
+              <input
+                type="color"
+                aria-label="Custom text color"
+                value={/^#[0-9a-f]{6}$/i.test(active.color) ? active.color : '#c2456f'}
+                onChange={(event) => applyColor(event.target.value, true)}
+              />
+            </label>
+          </div>
+        )}
+      </div>
       <div className="format-pop">
         <button type="button" className={cx('format-bar__drop', menu === 'style' && 'is-open')} aria-haspopup="menu" onMouseDown={(event) => event.preventDefault()} onClick={() => toggle('style')}>
           {style.short}
