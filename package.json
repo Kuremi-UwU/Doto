@@ -1,7 +1,7 @@
 {
   "name": "doto",
   "productName": "Doto",
-  "version": "0.3.0-b",
+  "version": "0.3.0-b.a",
   "private": true,
   "description": "A modular desktop notepad with a floating to-do window, images and video embeds.",
   "main": "./out/main/index.js",
@@ -64,7 +64,7 @@
     "win": {
       "target": "portable",
       "icon": "resources/icon.ico",
-      "artifactName": "Doto-0.3b-portable.exe"
+      "artifactName": "Doto-0.3b-a-portable.exe"
     }
   }
 }
