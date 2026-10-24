@@ -1,5 +1,6 @@
 import { Extension, mergeAttributes, Node } from '@tiptap/core'
-import { NodeSelection, Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state'
+import { NodeSelection, Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from '@tiptap/pm/state'
+import type { EditorView } from '@tiptap/pm/view'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { FontFamily, FontSize, TextStyle } from '@tiptap/extension-text-style'
 import Image from '@tiptap/extension-image'
@@ -8,6 +9,7 @@ import Youtube from '@tiptap/extension-youtube'
 import { Placeholder } from '@tiptap/extensions'
 import type { Editor } from '@tiptap/react'
 import type { NoteContent } from '../../../shared/types'
+import { bindVoiceNote } from './voiceNote'
 import StarterKit from '@tiptap/starter-kit'
 
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/
@@ -43,6 +45,7 @@ export function createExtensions(placeholder: string) {
       resize: { enabled: true, alwaysPreserveAspectRatio: true, minWidth: 80, minHeight: 40 }
     }),
     LocalVideo,
+    LocalAudio,
     Youtube.configure({
       nocookie: true,
       addPasteHandler: false,
@@ -58,7 +61,7 @@ export function createExtensions(placeholder: string) {
   ]
 }
 
-const MEDIA_NODES = new Set(['image', 'youtube', 'localVideo'])
+const MEDIA_NODES = new Set(['image', 'youtube', 'localVideo', 'localAudio'])
 
 /** Gives every image and video a stable id so marker ink can stay attached to it. */
 const MediaIds = Extension.create({
@@ -66,7 +69,7 @@ const MediaIds = Extension.create({
   addGlobalAttributes() {
     return [
       {
-        types: ['image', 'youtube', 'localVideo'],
+        types: ['image', 'youtube', 'localVideo', 'localAudio'],
         attributes: {
           mediaId: {
             default: null,
@@ -106,6 +109,23 @@ const MediaIds = Extension.create({
         }
       }),
       new Plugin({
+        key: new PluginKey('audioGuard'),
+        props: {
+          handleKeyDown(view, event) {
+            const cut = (event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'x'
+            const key = event.key === 'Backspace' || event.key === 'Delete' ? event.key : null
+            if (!cut && !key) return false
+            if (key && removeEmptyLineBesideAudio(view, key)) {
+              event.preventDefault()
+              return true
+            }
+            if (!wouldRemoveAudio(view.state, key ?? 'Delete')) return false
+            event.preventDefault()
+            return true
+          }
+        }
+      }),
+      new Plugin({
         key: new PluginKey('pinnedMedia'),
         props: {
           handleDOMEvents: {
@@ -132,6 +152,48 @@ const MediaIds = Extension.create({
     ]
   }
 })
+
+/** Drops a blank line that sits against a voice note, without deleting the note. */
+function removeEmptyLineBesideAudio(view: EditorView, key: 'Backspace' | 'Delete'): boolean {
+  const { state } = view
+  const { selection } = state
+  if (!selection.empty || !(selection instanceof TextSelection)) return false
+  const $from = selection.$from
+  if (!$from.parent.isTextblock || $from.parent.content.size > 0 || $from.depth < 1) return false
+  const parent = $from.node($from.depth - 1)
+  const index = $from.index($from.depth - 1)
+  const neighbor = key === 'Backspace' ? (index > 0 ? parent.child(index - 1) : null) : index < parent.childCount - 1 ? parent.child(index + 1) : null
+  if (neighbor?.type.name !== 'localAudio' || !parent.canReplace(index, index + 1)) return false
+  view.dispatch(state.tr.delete($from.before(), $from.after()).scrollIntoView())
+  return true
+}
+
+function wouldRemoveAudio(state: EditorState, key: 'Backspace' | 'Delete'): boolean {
+  const { selection } = state
+  if (selection instanceof NodeSelection && selection.node.type.name === 'localAudio') return true
+  if (!selection.empty) {
+    let hit = false
+    state.doc.nodesBetween(selection.from, selection.to, (node) => {
+      if (node.type.name === 'localAudio') hit = true
+    })
+    return hit
+  }
+  const $from = selection.$from
+  if (key === 'Backspace') {
+    if ($from.nodeBefore?.type.name === 'localAudio') return true
+    if ($from.parentOffset === 0 && $from.depth > 0) {
+      const before = state.doc.resolve($from.before()).nodeBefore
+      if (before?.type.name === 'localAudio') return true
+    }
+  } else {
+    if ($from.nodeAfter?.type.name === 'localAudio') return true
+    if ($from.parentOffset === $from.parent.content.size && $from.depth > 0) {
+      const after = state.doc.resolve($from.after()).nodeAfter
+      if (after?.type.name === 'localAudio') return true
+    }
+  }
+  return false
+}
 
 function stampMediaTransaction(state: EditorState): Transaction | null {
   let changed = false
@@ -391,6 +453,12 @@ export function setAttachmentOffset(editor: Editor, mediaId: string, offsetX: nu
   editor.view.dispatch(editor.state.tr.setNodeMarkup(found.pos, undefined, { ...found.attrs, offsetX: next }))
 }
 
+export function mediaSrc(editor: Editor, mediaId: string): string | null {
+  const found = locateMedia(editor.state.doc, mediaId)
+  const src = found?.attrs.src
+  return typeof src === 'string' && src ? src : null
+}
+
 export function deleteAttachment(editor: Editor, mediaId: string): void {
   const found = locateMedia(editor.state.doc, mediaId)
   if (!found) return
@@ -413,6 +481,89 @@ function locateMedia(doc: EditorState['doc'], mediaId: string): { pos: number; a
     return false
   })
   return match
+}
+
+const LocalAudio = Node.create({
+  name: 'localAudio',
+  group: 'block',
+  atom: true,
+  draggable: true,
+  addAttributes() {
+    return {
+      src: { default: null },
+      duration: {
+        default: null,
+        parseHTML: (element) => {
+          const value = Number(element.getAttribute('data-duration'))
+          return Number.isFinite(value) && value > 0 ? Math.round(value) : null
+        },
+        renderHTML: (attributes) => {
+          const value = Number(attributes.duration)
+          return Number.isFinite(value) && value > 0 ? { 'data-duration': String(Math.round(value)) } : {}
+        }
+      }
+    }
+  },
+  parseHTML() {
+    return [{ tag: 'audio[src]' }]
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['audio', mergeAttributes(HTMLAttributes, { controls: 'true' })]
+  },
+  addNodeView() {
+    return ({ node }) => {
+      const dom = document.createElement('div')
+      dom.className = 'media-frame media-frame--audio voice-note'
+      const audio = document.createElement('audio')
+      bindVoiceNote(dom, audio)
+      const apply = (current: typeof node): void => {
+        const src = typeof current.attrs.src === 'string' ? current.attrs.src : ''
+        if (audio.getAttribute('src') !== src) {
+          if (src) audio.src = src
+          else audio.removeAttribute('src')
+        }
+        const id = typeof current.attrs.mediaId === 'string' ? current.attrs.mediaId : ''
+        if (id) dom.dataset.mediaId = id
+        else delete dom.dataset.mediaId
+        const seconds = Number(current.attrs.duration)
+        if (Number.isFinite(seconds) && seconds > 0) dom.dataset.duration = String(Math.round(seconds))
+        else delete dom.dataset.duration
+        dom.dispatchEvent(new Event('doto-duration'))
+      }
+      apply(node)
+      return {
+        dom,
+        update(updated) {
+          if (updated.type.name !== 'localAudio') return false
+          apply(updated)
+          return true
+        },
+        ignoreMutation() {
+          return true
+        }
+      }
+    }
+  }
+})
+
+export function insertLocalAudio(editor: Editor, src: string, duration = 0): void {
+  const seconds = Number.isFinite(duration) && duration > 0 ? Math.round(duration) : null
+  editor.chain().focus().insertContent({ type: 'localAudio', attrs: { src, ...(seconds ? { duration: seconds } : {}) } }).run()
+}
+
+/** Points a just-inserted clip at its saved file, or removes it when saving failed. */
+export function replaceAudioSrc(editor: Editor, from: string, to: string | null): void {
+  const spots: Array<{ pos: number; size: number; attrs: Record<string, unknown> }> = []
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'localAudio' && node.attrs.src === from) spots.push({ pos, size: node.nodeSize, attrs: { ...node.attrs } })
+  })
+  if (spots.length === 0 || editor.isDestroyed) return
+  let tr = editor.state.tr
+  for (const spot of spots.reverse()) {
+    const pos = tr.mapping.map(spot.pos)
+    tr = to ? tr.setNodeMarkup(pos, undefined, { ...spot.attrs, src: to }) : tr.delete(pos, pos + spot.size)
+  }
+  editor.view.dispatch(tr)
 }
 
 export function insertLocalVideo(editor: Editor, src: string): void {

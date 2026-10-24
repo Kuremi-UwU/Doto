@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Editor } from '@tiptap/react'
-import { Clapperboard, Columns2, Eraser, Highlighter, ImagePlus, ListChecks, Pencil, Save, Search, StickyNote, Trash2 } from 'lucide-react'
+import { Clapperboard, Columns2, Eraser, Highlighter, ImagePlus, ListChecks, Mic, Pencil, Save, Search, StickyNote, Trash2 } from 'lucide-react'
 import { moveDockItem } from '../../../shared/dock'
 import type { DockItemId, DockSide, ModuleKind } from '../../../shared/types'
 import { openTasksIn, wordsIn } from '../../../shared/stats'
 import { cx } from '../cx'
 import { useActiveEditor } from '../editor/active'
-import { insertImages } from '../editor/extensions'
+import { lastRecordingSeconds, toggleAudioRecording, useAudioLevels, useAudioRecording } from '../audioRecord'
+import { insertImages, insertLocalAudio, replaceAudioSrc } from '../editor/extensions'
 import { useDoto } from '../store'
 import { askConfirm } from './ConfirmDialog'
 
@@ -35,6 +36,7 @@ export default function BottomBar(props: BottomBarProps): React.JSX.Element {
 
   return (
     <footer className="bottombar">
+      <RecordingMeter />
       {marker.active && <MarkerOptions />}
       <DockZone side="left" ids={dock.left} onDrop={drop} {...props} />
       <DockZone side="center" ids={dock.center} onDrop={drop} {...props} />
@@ -89,6 +91,7 @@ function DockButton({
 }: BottomBarProps & { id: DockItemId; compact: boolean; index: number; side: DockSide; onDrop: (id: DockItemId, side: DockSide, index: number) => void }): React.JSX.Element {
   const focused = useActiveEditor()
   const target = focused ?? editor
+  const recording = useAudioRecording()
   const keybinds = useDoto((state) => state.keybinds)
   const markerOn = useDoto((state) => state.marker.active)
   const dragged = useRef(false)
@@ -102,22 +105,24 @@ function DockButton({
     else if (id === 'todo') onAddModule('todo')
     else if (id === 'notes') onAddModule('notes')
     else if (id === 'image') void addImages(target)
+    else if (id === 'audio') void recordAudio(target)
     else onOpenVideo()
   }
 
-  const disabled = (id === 'image' || id === 'video') && !target
-  const active = (id === 'search' && searching) || (id === 'frame' && adjusting) || (id === 'marker' && markerOn)
+  const disabled = (id === 'image' || id === 'video' || (id === 'audio' && !recording)) && !target
+  const active = (id === 'search' && searching) || (id === 'frame' && adjusting) || (id === 'marker' && markerOn) || (id === 'audio' && recording)
+  const iconOnly = id === 'audio'
   const label = LABELS[id]
   const shortcut =
     id === 'save' ? keybinds.save : id === 'search' ? keybinds.find : id === 'marker' ? keybinds.marker : id === 'notes' ? keybinds.notes : id === 'todo' ? keybinds.todo : ''
-  const action = id === 'marker' && markerOn ? 'Marker is on. Click to stop drawing.' : shortcut ? `${label} (${shortcut}). Drag to move.` : `${label}. Drag to move.`
+  const action = id === 'audio' && recording ? 'Recording. Click to stop and insert it.' : id === 'marker' && markerOn ? 'Marker is on. Click to stop drawing.' : shortcut ? `${label} (${shortcut}). Drag to move.` : `${label}. Drag to move.`
 
   return (
     <button
       type="button"
       draggable
       disabled={disabled}
-      className={cx(compact ? 'frame-toggle' : 'dock-button', active && 'is-active')}
+      className={cx(compact ? 'frame-toggle' : 'dock-button', iconOnly && 'dock-button--icon', active && 'is-active', id === 'audio' && recording && 'is-recording')}
       title={action}
       onDragStart={(event) => {
         dragged.current = true
@@ -145,7 +150,7 @@ function DockButton({
       onClick={run}
     >
       <Icon id={id} />
-      {!compact && label}
+      {!compact && !iconOnly && label}
     </button>
   )
 }
@@ -158,7 +163,27 @@ function Icon({ id }: { id: DockItemId }): React.JSX.Element {
   if (id === 'todo') return <ListChecks size={18} />
   if (id === 'notes') return <StickyNote size={18} />
   if (id === 'image') return <ImagePlus size={18} />
+  if (id === 'audio') return <RecordFace />
   return <Clapperboard size={18} />
+}
+
+function RecordFace(): React.JSX.Element {
+  return <Mic size={18} />
+}
+
+function RecordingMeter(): React.JSX.Element | null {
+  const recording = useAudioRecording()
+  const levels = useAudioLevels()
+  if (!recording) return null
+  return (
+    <div className="record-meter" aria-hidden="true">
+      <span className="record-wave">
+        {levels.map((level, index) => (
+          <span key={index} style={{ transform: `scaleY(${0.18 + level * 0.82})` }} />
+        ))}
+      </span>
+    </div>
+  )
 }
 
 const LABELS: Record<DockItemId, string> = {
@@ -169,7 +194,33 @@ const LABELS: Record<DockItemId, string> = {
   todo: 'To-do',
   notes: 'Notes',
   image: 'Image',
-  video: 'Video'
+  video: 'Video',
+  audio: 'Record'
+}
+
+async function recordAudio(target: Editor | null): Promise<void> {
+  const tabId = useDoto.getState().tab?.id
+  try {
+    const clip = await toggleAudioRecording()
+    if (!clip || clip.size === 0 || !target || target.isDestroyed || !tabId) return
+    const preview = URL.createObjectURL(clip)
+    insertLocalAudio(target, preview, lastRecordingSeconds())
+    const src = await window.doto.saveAudio(tabId, new Uint8Array(await clip.arrayBuffer()))
+    if (target.isDestroyed) {
+      URL.revokeObjectURL(preview)
+      return
+    }
+    replaceAudioSrc(target, preview, src)
+    URL.revokeObjectURL(preview)
+  } catch (error) {
+    const detail = error instanceof Error && error.message ? ` ${error.message}` : ''
+    askConfirm({
+      title: 'Microphone',
+      message: `Doto couldn't use the Windows default microphone.${detail}`,
+      confirmLabel: 'OK',
+      run: () => undefined
+    })
+  }
 }
 
 async function addImages(target: Editor | null): Promise<void> {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Editor } from '@tiptap/react'
-import type { AppCommand, ModuleColor, ModuleKind } from '../../shared/types'
+import type { AppCommand, ModuleColor, ModuleInstance, ModuleKind } from '../../shared/types'
 import BottomBar from './components/BottomBar'
 import ModuleWindow, { stackedWindowRect, type Size } from './components/ModuleWindow'
 import { EraserCursor } from './components/InkLayer'
@@ -35,6 +35,26 @@ export default function App(): React.JSX.Element {
   const [layer, setLayer] = useState<HTMLDivElement | null>(null)
   const bounds = useElementSize(layer)
   const commandRef = useRef<(command: AppCommand) => void>(() => undefined)
+  const closedModule = useRef<{ module: ModuleInstance; trashId: string | null } | null>(null)
+
+  useEffect(() => {
+    closedModule.current = null
+  }, [tabId])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'z') return
+      if (!(event.ctrlKey || event.metaKey)) return
+      const closed = closedModule.current
+      if (!closed) return
+      event.preventDefault()
+      closedModule.current = null
+      useDoto.getState().addModule(closed.module)
+      if (closed.trashId) void useDoto.getState().deleteArchived(closed.trashId)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   useEffect(() => {
     void useDoto.getState().init()
@@ -51,6 +71,7 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
+    if (navigator.userAgent.includes('Windows')) document.documentElement.dataset.platform = 'win32'
   }, [theme])
 
   useEffect(() => {
@@ -146,11 +167,18 @@ export default function App(): React.JSX.Element {
                 onTogglePin={() => updateModule(module.id, (current) => ({ ...current, pinned: !current.pinned }))}
                 onClose={() => {
                   const snapshot = useDoto.getState().tab?.modules.find((item) => item.id === module.id)
+                  if (!snapshot) return
+                  const copy = structuredClone(snapshot)
                   void (async () => {
-                    if (snapshot && moduleHasInformation(snapshot)) {
-                      await useDoto.getState().trashModule(snapshot)
+                    let trashId: string | null = null
+                    if (moduleHasInformation(copy)) {
+                      const before = useDoto.getState().archive.length
+                      await useDoto.getState().trashModule(copy)
+                      const archive = useDoto.getState().archive
+                      trashId = archive.length > before ? (archive[0]?.id ?? null) : null
                     }
-                    useDoto.getState().removeModule(module.id)
+                    closedModule.current = { module: copy, trashId }
+                    useDoto.getState().removeModule(copy.id)
                   })()
                 }}
               >

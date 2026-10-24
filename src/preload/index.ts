@@ -21,6 +21,7 @@ const api: DotoApi = {
   saveTab: (tab) => ipcRenderer.invoke(Channel.saveTab, tab),
   archiveTab: (id) => ipcRenderer.invoke(Channel.archiveTab, id),
   trashModule: (module) => ipcRenderer.invoke(Channel.trashModule, module),
+  trashAudio: (src) => ipcRenderer.invoke(Channel.trashAudio, src),
   restoreArchived: (id) => ipcRenderer.invoke(Channel.restoreArchived, id),
   deleteArchived: (id) => ipcRenderer.invoke(Channel.deleteArchived, id),
   emptyTrash: () => ipcRenderer.invoke(Channel.emptyTrash),
@@ -31,6 +32,7 @@ const api: DotoApi = {
   setTabColor: (id, color) => ipcRenderer.invoke(Channel.setTabColor, id, color),
   pickImages: (tabId) => ipcRenderer.invoke(Channel.pickImages, tabId),
   pickVideo: (tabId) => ipcRenderer.invoke(Channel.pickVideo, tabId),
+  saveAudio: (tabId, bytes) => ipcRenderer.invoke(Channel.saveAudio, tabId, bytes),
   claimEditorMenu: () => {
     ipcRenderer.sendSync(Channel.claimEditorMenu)
   },

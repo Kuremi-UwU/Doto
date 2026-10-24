@@ -5,7 +5,7 @@ import { cx } from '../cx'
 import { clearEditor, focusEditor } from '../editor/active'
 import { armScrollbarDrag, isDraggingScrollbar, isScrollbarHit } from '../editor/scrollbar'
 import { createExtensions, withMediaIds } from '../editor/extensions'
-import { notesMatch, registerEditorSnapshot } from '../editor/snapshot'
+import { notesMatch, registerEditorSnapshot, registerPageContent } from '../editor/snapshot'
 import InkLayer from './InkLayer'
 import AttachmentPins from './AttachmentPins'
 import MediaInk from './MediaInk'
@@ -50,6 +50,16 @@ export default function Notepad({ adjusting, onEditorChange }: NotepadProps): Re
   })
 
   editorRef.current = editor
+
+  useEffect(() => {
+    if (!editor) return undefined
+    return registerPageContent((content) => {
+      if (editor.isDestroyed) return
+      const next = withMediaIds(content)
+      if (!next || notesMatch(next, editor.getJSON())) return
+      editor.commands.setContent(next, { emitUpdate: false })
+    })
+  }, [editor])
 
   useEffect(() => {
     if (!editor) return undefined

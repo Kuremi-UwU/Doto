@@ -111,6 +111,7 @@ async function blockFrom(node: NoteNode, readImage: (src: string) => Promise<Buf
   }
   if (type === 'image') return [new Paragraph({ children: await imageRuns(node, readImage) })]
   if (type === 'paragraph') return [await paragraphBlock(node, readImage)]
+  if (type === 'localAudio') return [new Paragraph({ children: [new TextRun('Audio recording')] })]
   if (type === 'youtube') {
     const src = isRecord(node.attrs) && typeof node.attrs.src === 'string' ? node.attrs.src : ''
     return [new Paragraph({ children: src ? [linkRun(src, src)] : [new TextRun('Video')] })]

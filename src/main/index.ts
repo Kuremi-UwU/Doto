@@ -1,10 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, screen, session, shell } from 'electron'
 import type { IpcMainEvent, IpcMainInvokeEvent, MenuItemConstructorOptions, WebContents } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Channel } from '../shared/channels'
 import { APP_COMMANDS, eventMatches } from '../shared/keys'
-import type { Theme } from '../shared/types'
+import { isDarkTheme, isTheme, THEME_SWATCHES, type Theme } from '../shared/types'
 import { appIcon } from './icon'
 import * as storage from './storage'
 import { checkForUpdate } from './update'
@@ -14,7 +14,8 @@ const APP_ID = 'com.kuremi.doto'
 const EMBED_REFERER = `https://${APP_ID}/`
 const YOUTUBE_URLS = ['https://www.youtube-nocookie.com/*', 'https://www.youtube.com/*']
 const ALLOWED_PERMISSIONS = new Set(['fullscreen', 'clipboard-sanitized-write'])
-const BACKGROUND: Record<Theme, string> = { light: '#f7f5f0', dark: '#17181a' }
+const BACKGROUND = Object.fromEntries(Object.entries(THEME_SWATCHES).map(([id, swatch]) => [id, swatch.ground])) as Record<Theme, string>
+const TITLE_BAR = Object.fromEntries(Object.entries(THEME_SWATCHES).map(([id, swatch]) => [id, { color: swatch.surface, symbolColor: swatch.text }])) as Record<Theme, { color: string; symbolColor: string }>
 const CLOSE_TIMEOUT_MS = 3000
 let editorMenuClaimed = false
 
@@ -57,7 +58,7 @@ async function start(): Promise<void> {
 
 async function createWindow(): Promise<void> {
   const { theme } = await storage.loadLibrary()
-  nativeTheme.themeSource = theme
+  nativeTheme.themeSource = isDarkTheme(theme) ? 'dark' : 'light'
 
   const win = new BrowserWindow({
     width: 1240,
@@ -68,6 +69,9 @@ async function createWindow(): Promise<void> {
     title: 'Doto',
     icon: appIcon(theme),
     backgroundColor: BACKGROUND[theme],
+    ...(process.platform === 'win32'
+      ? { titleBarStyle: 'hidden' as const, titleBarOverlay: { ...TITLE_BAR[theme], height: 42 } }
+      : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -85,17 +89,86 @@ async function createWindow(): Promise<void> {
   attachContextMenu(win.webContents)
   saveBeforeClose(win)
   bindKeys(win)
+  fitWindowToDisplay(win)
 
   const devServer = process.env.ELECTRON_RENDERER_URL
   const loaded = !app.isPackaged && devServer ? win.loadURL(devServer) : win.loadFile(join(__dirname, '../renderer/index.html'))
   loaded.catch((error: unknown) => console.error('Failed to load the renderer', error))
 }
 
+/** Keeps the window the same portion of the screen when it is moved onto a display with a different size or scale. */
+function fitWindowToDisplay(win: BrowserWindow): void {
+  let display = screen.getDisplayMatching(win.getBounds())
+  let share = displayShare(win)
+
+  const remember = (): void => {
+    if (win.isDestroyed() || win.isMaximized() || win.isMinimized() || win.isFullScreen()) return
+    display = screen.getDisplayMatching(win.getBounds())
+    share = displayShare(win)
+  }
+
+  const refit = (): void => {
+    if (win.isDestroyed()) return
+    const next = screen.getDisplayMatching(win.getBounds())
+    const same =
+      next.id === display.id &&
+      next.scaleFactor === display.scaleFactor &&
+      next.workArea.width === display.workArea.width &&
+      next.workArea.height === display.workArea.height
+    if (same) return
+    if (win.isMinimized()) {
+      display = next
+      return
+    }
+    if (win.isMaximized() || win.isFullScreen()) {
+      display = next
+      if (win.isMaximized()) {
+        win.unmaximize()
+        win.maximize()
+      }
+      return
+    }
+    const area = next.workArea
+    const [minW, minH] = win.getMinimumSize()
+    const width = clamp(Math.round(area.width * share.w), Math.min(minW, area.width), area.width)
+    const height = clamp(Math.round(area.height * share.h), Math.min(minH, area.height), area.height)
+    const current = win.getBounds()
+    const relX = display.workArea.width > 0 ? (current.x - display.workArea.x) / display.workArea.width : 0
+    const relY = display.workArea.height > 0 ? (current.y - display.workArea.y) / display.workArea.height : 0
+    const x = clamp(Math.round(area.x + relX * area.width), area.x, area.x + area.width - width)
+    const y = clamp(Math.round(area.y + relY * area.height), area.y, area.y + area.height - height)
+    display = next
+    win.setBounds({ x, y, width, height })
+  }
+
+  win.on('resize', remember)
+  win.on('moved', refit)
+  screen.on('display-metrics-changed', refit)
+  win.on('closed', () => screen.removeListener('display-metrics-changed', refit))
+}
+
+function displayShare(win: BrowserWindow): { w: number; h: number } {
+  const area = screen.getDisplayMatching(win.getBounds()).workArea
+  const bounds = win.getBounds()
+  return {
+    w: area.width > 0 ? Math.min(1, bounds.width / area.width) : 1,
+    h: area.height > 0 ? Math.min(1, bounds.height / area.height) : 1
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
 function registerAssetProtocol(): void {
   protocol.handle(storage.ASSET_SCHEME, async (request) => {
     try {
       const file = storage.resolveAssetPath(request.url)
-      if (file) return await net.fetch(pathToFileURL(file).toString())
+      if (!file) return new Response(null, { status: 404 })
+      const headers = new Headers()
+      const range = request.headers.get('Range')
+      if (range) headers.set('Range', range)
+      return await net.fetch(pathToFileURL(file).toString(), { headers })
     } catch {
       // Missing or malformed asset; fall through to 404.
     }
@@ -109,7 +182,16 @@ function configureSession(): void {
     if (!details.referrer && !requestHeaders.Referer) requestHeaders.Referer = EMBED_REFERER
     callback({ requestHeaders })
   })
-  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => {
+  session.defaultSession.setPermissionCheckHandler((_contents, permission, _origin, details) => {
+    if (permission === 'media') return details.mediaType !== 'video'
+    return true
+  })
+  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => {
+    if (permission === 'media') {
+      const kinds = 'mediaTypes' in details && Array.isArray(details.mediaTypes) ? details.mediaTypes : []
+      callback(!kinds.includes('video'))
+      return
+    }
     callback(ALLOWED_PERMISSIONS.has(permission))
   })
 }
@@ -117,11 +199,9 @@ function configureSession(): void {
 function registerIpc(): void {
   handle(Channel.loadLibrary, () => storage.loadLibrary())
   handle(Channel.setTheme, (theme) => {
-    const next: Theme = theme === 'dark' ? 'dark' : 'light'
-    nativeTheme.themeSource = next
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) win.setIcon(appIcon(next))
-    }
+    const next: Theme = isTheme(theme) ? theme : 'light'
+    nativeTheme.themeSource = isDarkTheme(next) ? 'dark' : 'light'
+    for (const win of BrowserWindow.getAllWindows()) applyChrome(win, next)
     return storage.setTheme(next)
   })
   handle(Channel.setAutoSave, (enabled, minutes) => storage.setAutoSave(enabled === true, minutes))
@@ -140,6 +220,7 @@ function registerIpc(): void {
   handle(Channel.saveTab, (tab) => storage.saveTab(tab))
   handle(Channel.archiveTab, (id) => storage.archiveTab(pageId(id)))
   handle(Channel.trashModule, (module) => storage.trashModule(module))
+  handle(Channel.trashAudio, (src) => storage.trashAudio(src))
   handle(Channel.restoreArchived, (id) => storage.restoreArchived(pageId(id)))
   handle(Channel.deleteArchived, (id) => storage.deleteArchived(pageId(id)))
   handle(Channel.emptyTrash, () => storage.emptyTrash())
@@ -150,6 +231,10 @@ function registerIpc(): void {
   handle(Channel.setTabColor, (id, color) => storage.setTabColor(pageId(id), color === 'sand' || color === 'blue' || color === 'green' || color === 'rose' || color === 'amber' || color === 'violet' ? color : 'default'))
   handle(Channel.pickImages, (id) => pickImages(pageId(id)))
   handle(Channel.pickVideo, (id) => pickVideo(pageId(id)))
+  handle(Channel.saveAudio, (id, data) => {
+    const bytes = audioBytes(data)
+    return bytes ? storage.saveRecordedAudio(pageId(id), bytes) : null
+  })
   handle(Channel.checkUpdate, () => checkForUpdate())
   ipcMain.on(Channel.claimEditorMenu, (event) => {
     const trusted = mainWindow !== null && event.sender === mainWindow.webContents && event.senderFrame?.parent === null
@@ -167,6 +252,19 @@ function handle(channel: string, listener: (...args: unknown[]) => unknown): voi
 
 function fromAppFrame(event: IpcMainInvokeEvent): boolean {
   return mainWindow !== null && event.sender === mainWindow.webContents && event.senderFrame?.parent === null
+}
+
+function applyChrome(win: BrowserWindow, theme: Theme): void {
+  if (win.isDestroyed()) return
+  win.setBackgroundColor(BACKGROUND[theme])
+  win.setIcon(appIcon(theme))
+  if (process.platform === 'win32') win.setTitleBarOverlay({ ...TITLE_BAR[theme], height: 42 })
+}
+
+function audioBytes(value: unknown): Buffer | null {
+  if (Buffer.isBuffer(value)) return value
+  if (value instanceof Uint8Array) return Buffer.from(value)
+  return null
 }
 
 function pageId(value: unknown): string {

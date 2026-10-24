@@ -1,7 +1,7 @@
 import { app, nativeImage, type NativeImage } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Theme } from '../shared/types'
+import { isDarkTheme, type Theme } from '../shared/types'
 
 /** The Doto mark used for the window, the taskbar, and exported notes. */
 export function appIconPath(): string {
@@ -13,7 +13,7 @@ export function appIconPath(): string {
 /** Dark mark on a light window, light mark on a dark window. */
 export function appIcon(theme: Theme): NativeImage {
   const image = nativeImage.createFromPath(appIconPath())
-  if (theme !== 'dark' || image.isEmpty()) return image
+  if (!isDarkTheme(theme) || image.isEmpty()) return image
   const { width, height } = image.getSize()
   const bitmap = Buffer.from(image.toBitmap())
   for (let i = 0; i < bitmap.length; i += 4) {

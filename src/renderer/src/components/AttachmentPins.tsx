@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { Editor } from '@tiptap/react'
-import { deleteAttachment, setAttachmentOffset, toggleAttachmentPin } from '../editor/extensions'
+import { ARCHIVE_DAYS } from '../../../shared/types'
+import { deleteAttachment, mediaSrc, setAttachmentOffset, toggleAttachmentPin } from '../editor/extensions'
 import { findMediaHosts } from '../editor/mediaInk'
 import { useDoto } from '../store'
 import { askConfirm } from './ConfirmDialog'
@@ -29,6 +30,7 @@ export default function AttachmentPins({ root, editor }: { root: HTMLElement | n
     const sync = (): void => {
       const present = new Set<string>()
       for (const { id, host } of findMediaHosts(root)) {
+        if (host.classList.contains('media-frame--audio')) continue
         present.add(id)
         const pinned = attachmentPinned(host)
         let entry = buttons.get(id)
@@ -111,22 +113,36 @@ export default function AttachmentPins({ root, editor }: { root: HTMLElement | n
       event.preventDefault()
       event.stopPropagation()
       window.doto.claimEditorMenu()
-      const name = hit.kind === 'image' ? 'image' : 'video'
+      const name = hit.kind === 'image' ? 'image' : hit.kind === 'audio' ? 'voice note' : 'video'
       askConfirm({
         title: `Delete this ${name}?`,
-        message: 'This removes it from the note.',
+        message: hit.kind === 'audio' ? `It moves to the trash for ${ARCHIVE_DAYS} days. You can restore it from there.` : 'This removes it from the note.',
         confirmLabel: 'Delete',
         run: () => {
           const live = editorRef.current
-          if (live && !live.isDestroyed) deleteAttachment(live, hit.id)
-          const ink = useDoto.getState().tab?.ink ?? []
-          useDoto.getState().setInk(ink.filter((stroke) => stroke.surface !== `media:${hit.id}`))
+          if (!live || live.isDestroyed) return
+          const remove = (): void => {
+            if (live.isDestroyed) return
+            deleteAttachment(live, hit.id)
+            live.commands.focus()
+            const ink = useDoto.getState().tab?.ink ?? []
+            useDoto.getState().setInk(ink.filter((stroke) => stroke.surface !== `media:${hit.id}`))
+          }
+          if (hit.kind !== 'audio') {
+            remove()
+            return
+          }
+          const src = mediaSrc(live, hit.id)
+          if (!src) return
+          void useDoto.getState().trashAudio(src).then((archived) => {
+            if (archived) remove()
+          })
         }
       })
     }
 
     function slidableTarget(target: EventTarget | null): { id: string; marked: HTMLElement; shell: HTMLElement } | null {
-      if (!(target instanceof Element) || target.closest('.attachment-pin, [data-resize-handle]')) return null
+      if (!(target instanceof Element) || target.closest('.voice-note, .attachment-pin, [data-resize-handle]')) return null
       const marked = target.closest<HTMLElement>('[data-media-id]')
       if (!marked || !stage.contains(marked)) return null
       const id = marked.dataset.mediaId
@@ -187,13 +203,13 @@ export default function AttachmentPins({ root, editor }: { root: HTMLElement | n
   return null
 }
 
-function attachmentTarget(target: EventTarget | null): { id: string; kind: 'image' | 'video' } | null {
+function attachmentTarget(target: EventTarget | null): { id: string; kind: 'image' | 'video' | 'audio' } | null {
   if (!(target instanceof Element)) return null
   const marked = target.closest<HTMLElement>('[data-media-id]')
   if (!marked) return null
   const id = marked.dataset.mediaId
   if (!id) return null
-  const kind = marked.closest('img, [data-resize-container]') && !marked.closest('video, .media-frame, [data-youtube-video]') ? 'image' : 'video'
+  const kind = marked.closest('.media-frame--audio') ? 'audio' : marked.closest('img, [data-resize-container]') && !marked.closest('video, .media-frame, [data-youtube-video]') ? 'image' : 'video'
   return { id, kind }
 }
 

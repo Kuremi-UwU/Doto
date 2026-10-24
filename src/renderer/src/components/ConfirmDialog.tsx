@@ -27,10 +27,21 @@ export default function ConfirmDialog(): React.JSX.Element | null {
   useEffect(() => {
     if (!request) return undefined
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setRequest(null)
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        setRequest(null)
+        return
+      }
+      if (event.key !== 'Enter' || event.repeat || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return
+      event.preventDefault()
+      event.stopPropagation()
+      const run = request.run
+      setRequest(null)
+      run()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [request])
 
   if (!request) return null
@@ -62,7 +73,7 @@ export default function ConfirmDialog(): React.JSX.Element | null {
           <button type="button" className="button" onClick={() => setRequest(null)}>
             Cancel
           </button>
-          <button type="submit" className="button button--danger">
+          <button type="submit" className="button button--danger" autoFocus>
             {request.confirmLabel}
           </button>
         </div>

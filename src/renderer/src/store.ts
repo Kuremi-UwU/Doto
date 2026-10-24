@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { DEFAULT_DOCK } from '../../shared/dock'
 import { DEFAULT_KEYBINDS, normalizeKeybinds } from '../../shared/keys'
 import type { DockLayout, InkStroke, InkTool, Keybinds, Library, ModuleColor, ModuleInstance, NoteContent, SaveSummary, StatusBarSettings, Tab, TextFrame, Theme, TodoItem } from '../../shared/types'
-import { snapshotEditors } from './editor/snapshot'
+import { applyPageContent, snapshotEditors } from './editor/snapshot'
 
 const SAVE_DELAY_MS = 400
 const RETRY_DELAY_MS = 2000
@@ -36,6 +36,7 @@ interface DotoState {
   renameTab: (title: string) => void
   archiveTab: (id: string) => Promise<void>
   trashModule: (module: ModuleInstance) => Promise<void>
+  trashAudio: (src: string) => Promise<boolean>
   restoreArchived: (id: string) => Promise<void>
   deleteArchived: (id: string) => Promise<void>
   emptyTrash: () => Promise<void>
@@ -288,8 +289,18 @@ export const useDoto = create<DotoState>()((set, get) => {
       applyLibrary(library)
     },
 
+    trashAudio: async (src) => {
+      const library = await window.doto.trashAudio(src)
+      if (!library) return false
+      applyLibrary(library)
+      return true
+    },
+
     restoreArchived: async (id) => {
+      const previous = get().tab?.id
       await switchTo(() => window.doto.restoreArchived(id))
+      const tab = get().tab
+      if (tab && tab.id === previous) applyPageContent(tab.content)
     },
 
     deleteArchived: async (id) => {

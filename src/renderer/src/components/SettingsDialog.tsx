@@ -1,18 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Moon, Sun, X } from 'lucide-react'
+import { Check, ChevronDown, X } from 'lucide-react'
 import { acceleratorFromEvent } from '../../../shared/keys'
 import { APP_VERSION, MADE_BY_LINE, MADE_BY_SITE } from '../../../shared/signature'
-import type { Keybinds, StatusBarSettings, Theme } from '../../../shared/types'
+import { THEME_SWATCHES, type Keybinds, type StatusBarSettings, type Theme } from '../../../shared/types'
 import { setRecordingShortcut } from '../keybindLock'
 import { cx } from '../cx'
 import { useDoto } from '../store'
 import { askConfirm } from './ConfirmDialog'
-
-const THEMES: Array<{ value: Theme; label: string; icon: React.JSX.Element }> = [
-  { value: 'light', label: 'Light', icon: <Sun size={14} /> },
-  { value: 'dark', label: 'Dark', icon: <Moon size={14} /> }
-]
 
 type SettingsTab = 'general' | 'bottom' | 'keys'
 
@@ -121,22 +116,8 @@ function GeneralSettings({ onClose }: { onClose: () => void }): React.JSX.Elemen
   return (
     <>
       <section className="settings-card">
-      <h3 className="settings-dialog__label">Theme</h3>
-      <div className="segmented" role="radiogroup" aria-label="Theme">
-        {THEMES.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            role="radio"
-            aria-checked={theme === option.value}
-            className={cx('segmented__option', theme === option.value && 'is-active')}
-            onClick={() => setTheme(option.value)}
-          >
-            {option.icon}
-            {option.label}
-          </button>
-        ))}
-      </div>
+        <h3 className="settings-dialog__label">Theme</h3>
+        <ThemePicker theme={theme} onChange={setTheme} />
       </section>
       <section className="settings-card">
       <h3 className="settings-dialog__label">Save file location</h3>
@@ -225,6 +206,82 @@ function GeneralSettings({ onClose }: { onClose: () => void }): React.JSX.Elemen
         <img className="about-logo" src="logo.png" alt="Doto" />
       </section>
     </>
+  )
+}
+
+/** Light and Dark are neutral themes, so the bar uses their paper color. Every other theme uses its accent. */
+function themeBarStyle(value: Theme): React.CSSProperties {
+  const option = THEME_SWATCHES[value]
+  if (value === 'light' || value === 'dark') {
+    return { backgroundColor: option.ground, color: option.text, borderColor: option.border }
+  }
+  return {
+    backgroundColor: option.accent,
+    color: value.endsWith('-dark') ? option.ground : '#ffffff',
+    borderColor: option.accent
+  }
+}
+
+function ThemePicker({ theme, onChange }: { theme: Theme; onChange: (theme: Theme) => void }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+  const current = THEME_SWATCHES[theme]
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onPointer = (event: PointerEvent): void => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  return (
+    <div className="theme-picker" ref={root}>
+      <button
+        type="button"
+        className="theme-picker__bar"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={themeBarStyle(theme)}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="theme-picker__name">{current.label}</span>
+        <ChevronDown size={16} aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="theme-picker__menu" role="listbox" aria-label="Theme">
+          {(Object.keys(THEME_SWATCHES) as Theme[]).map((value) => {
+            const option = THEME_SWATCHES[value]
+            const selected = value === theme
+            return (
+              <button
+                key={value}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                className={cx('theme-picker__option', selected && 'is-active')}
+                style={themeBarStyle(value)}
+                onClick={() => {
+                  onChange(value)
+                  setOpen(false)
+                }}
+              >
+                <span className="theme-picker__name">{option.label}</span>
+                {selected && <Check size={16} aria-hidden="true" />}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 

@@ -2,10 +2,10 @@ import { app, nativeImage, nativeTheme } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import JSZip from 'jszip'
-import { extname, join } from 'node:path'
+import { basename, extname, join } from 'node:path'
 import { DEFAULT_DOCK, normalizeDock } from '../shared/dock'
 import { DEFAULT_KEYBINDS, normalizeKeybinds } from '../shared/keys'
-import { ARCHIVE_DAYS, MODULE_COLORS } from '../shared/types'
+import { ARCHIVE_DAYS, MODULE_COLORS, isTheme } from '../shared/types'
 import { moduleHasInformation, openTasksIn, tabHasInformation, wordsIn } from '../shared/stats'
 import { noteToDocx } from './document'
 import { appIconPath } from './icon'
@@ -31,6 +31,7 @@ import type {
 export const ASSET_SCHEME = 'doto-asset'
 export const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'svg']
 export const VIDEO_EXTENSIONS = ['mp4', 'webm', 'ogg', 'mov', 'm4v']
+export const AUDIO_EXTENSIONS = ['webm', 'ogg', 'mp3', 'wav', 'm4a']
 
 const FORMAT_VERSION = 2
 const UNTITLED = 'Untitled'
@@ -40,7 +41,7 @@ const MAX_NOTE_TEXT = 20000
 const ARCHIVE_MS = ARCHIVE_DAYS * 24 * 60 * 60 * 1000
 const ID_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const ID_PATTERN = new RegExp(`^${ID_SOURCE}$`)
-const ASSET_NAME_PATTERN = new RegExp(`^${ID_SOURCE}\\.(${[...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS].join('|')})$`)
+const ASSET_NAME_PATTERN = new RegExp(`^${ID_SOURCE}\\.(${[...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS].join('|')})$`)
 const DEFAULT_RECT: ModuleRect = { x: 24, y: 24, width: 340, height: 420 }
 
 const dataDir = (): string => app.getPath('userData')
@@ -372,6 +373,7 @@ export function restoreArchived(id: string): Promise<Opened> {
     }
 
     const entry = lib.archive[index]
+    if (entry.kind === 'audio') return restoreAudio(lib, entry, index)
     if (entry.kind === 'notes' || entry.kind === 'todo') {
       const save = activeSave(lib)
       const tab = await readTabFile(save.activeTabId, tabTitle(save, save.activeTabId))
@@ -404,10 +406,9 @@ export function restoreArchived(id: string): Promise<Opened> {
 export function emptyTrash(): Promise<Library> {
   return serialized(async () => {
     const lib = await ensureLibrary()
-    for (const entry of lib.archive) {
-      if (!saveContaining(lib, entry.id)) await fs.rm(join(assetsDir(), entry.id), { recursive: true, force: true })
-    }
+    const entries = lib.archive
     lib.archive = []
+    for (const entry of entries) await forgetClip(lib, entry)
     await writeLibrary(lib)
     return structuredClone(lib)
   })
@@ -458,10 +459,154 @@ export function deleteArchived(id: string): Promise<Library> {
     const lib = await ensureLibrary()
     const index = lib.archive.findIndex((entry) => entry.id === id)
     if (index === -1) return structuredClone(lib)
-    lib.archive.splice(index, 1)
-    if (!saveContaining(lib, id)) await fs.rm(join(assetsDir(), id), { recursive: true, force: true })
+    const [entry] = lib.archive.splice(index, 1)
+    if (entry) await forgetClip(lib, entry)
     await writeLibrary(lib)
     return structuredClone(lib)
+  })
+}
+
+const MAX_AUDIO_BYTES = 80 * 1024 * 1024
+
+/** Copies a voice note into the trash. The note copy is removed once the trash entry is. */
+export function trashAudio(src: unknown): Promise<Library | null> {
+  return serialized(async () => {
+    const lib = await ensureLibrary()
+    if (typeof src !== 'string') return null
+    const file = audioFile(src)
+    if (!file) return null
+    const name = basename(file)
+    if (!ASSET_NAME_PATTERN.test(name)) return null
+    try {
+      await fs.access(file)
+    } catch {
+      return null
+    }
+    const id = randomUUID()
+    const dir = join(assetsDir(), id)
+    await fs.mkdir(dir, { recursive: true })
+    await fs.copyFile(file, join(dir, name))
+    const save = activeSave(lib)
+    const now = Date.now()
+    lib.archive.unshift({
+      id,
+      saveId: save.id,
+      saveTitle: save.title,
+      title: 'Voice note',
+      content: {
+        type: 'doc',
+        content: [{ type: 'localAudio', attrs: { src: `${ASSET_SCHEME}://${id}/${name}`, origin: src, mediaId: randomUUID() } }]
+      },
+      modules: [],
+      color: 'default',
+      ink: [],
+      kind: 'audio',
+      createdAt: now,
+      archivedAt: now
+    })
+    await writeLibrary(lib)
+    return structuredClone(lib)
+  })
+}
+
+async function restoreAudio(lib: Library, entry: ArchivedNote, index: number): Promise<Opened> {
+  const src = archivedAudioSrc(entry)
+  const file = src ? audioFile(src) : null
+  const save = activeSave(lib)
+  const tab = await readTabFile(save.activeTabId, tabTitle(save, save.activeTabId))
+  if (file) {
+    const extension = extname(file).toLowerCase()
+    const name = `${randomUUID()}${extension}`
+    if (ASSET_NAME_PATTERN.test(name)) {
+      const dir = join(assetsDir(), tab.id)
+      await fs.mkdir(dir, { recursive: true })
+      await fs.copyFile(file, join(dir, name))
+      tab.content = appendAudio(tab.content, `${ASSET_SCHEME}://${tab.id}/${name}`)
+      tab.updatedAt = Date.now()
+      await writeJson(pageFile(tab.id), { version: FORMAT_VERSION, ...tab })
+      save.updatedAt = tab.updatedAt
+    }
+  }
+  lib.archive.splice(index, 1)
+  await forgetClip(lib, entry)
+  await writeLibrary(lib)
+  return opened(lib, tab)
+}
+
+function archivedAudioSrc(entry: ArchivedNote): string | null {
+  const content = entry.content
+  if (!isRecord(content) || !Array.isArray(content.content)) return null
+  for (const child of content.content) {
+    if (!isRecord(child) || child.type !== 'localAudio' || !isRecord(child.attrs)) continue
+    return typeof child.attrs.src === 'string' ? child.attrs.src : null
+  }
+  return null
+}
+
+function appendAudio(content: NoteContent | null, src: string): NoteContent {
+  const node = { type: 'localAudio', attrs: { src, mediaId: randomUUID() } }
+  if (!isRecord(content) || !Array.isArray(content.content)) return { type: 'doc', content: [node] }
+  return { ...content, content: [...content.content, node] }
+}
+
+/** Removes a trash entry's files. A voice note's original file stays if a page still points at it. */
+async function forgetClip(lib: Library, entry: ArchivedNote): Promise<void> {
+  if (entry.kind !== 'audio') {
+    if (!saveContaining(lib, entry.id)) await fs.rm(join(assetsDir(), entry.id), { recursive: true, force: true })
+    return
+  }
+  await fs.rm(join(assetsDir(), entry.id), { recursive: true, force: true })
+  const origin = audioAttr(entry, 'origin')
+  const file = origin ? audioFile(origin) : null
+  if (!origin || !file || (await clipReferenced(lib, origin, entry.id))) return
+  await fs.rm(file, { force: true })
+}
+
+function audioAttr(entry: ArchivedNote, key: string): string | null {
+  const content = entry.content
+  if (!isRecord(content) || !Array.isArray(content.content)) return null
+  for (const child of content.content) {
+    if (!isRecord(child) || child.type !== 'localAudio' || !isRecord(child.attrs)) continue
+    const value = child.attrs[key]
+    return typeof value === 'string' ? value : null
+  }
+  return null
+}
+
+async function clipReferenced(lib: Library, src: string, exceptId: string): Promise<boolean> {
+  for (const entry of lib.archive) {
+    if (entry.id === exceptId) continue
+    if (JSON.stringify(entry).includes(src)) return true
+  }
+  for (const save of lib.saves) {
+    for (const summary of save.tabs) {
+      const raw = await fs.readFile(pageFile(summary.id), 'utf8').catch(() => '')
+      if (raw.includes(src)) return true
+    }
+  }
+  return false
+}
+
+function audioFile(src: string): string | null {
+  if (!src.startsWith(`${ASSET_SCHEME}://`)) return null
+  try {
+    return resolveAssetPath(src)
+  } catch {
+    return null
+  }
+}
+
+/** Writes a microphone recording into the tab folder. */
+export function saveRecordedAudio(tabId: string, data: Buffer): Promise<string | null> {
+  return serialized(async () => {
+    if (data.byteLength === 0 || data.byteLength > MAX_AUDIO_BYTES) return null
+    const lib = await ensureLibrary()
+    if (!saveContaining(lib, tabId)) return null
+    const dir = join(assetsDir(), tabId)
+    await fs.mkdir(dir, { recursive: true })
+    const name = `${randomUUID()}.webm`
+    await fs.writeFile(join(dir, name), data)
+    return `${ASSET_SCHEME}://${tabId}/${name}`
   })
 }
 
@@ -510,7 +655,7 @@ async function ensureLibrary(): Promise<Library> {
     .filter(isPageId)
 
   const lib = Array.isArray(saved.saves) ? await libraryFromSaves(saved, onDisk) : await libraryFromPages(saved, onDisk)
-  lib.theme = saved.theme === 'dark' || saved.theme === 'light' ? saved.theme : nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+  lib.theme = isTheme(saved.theme) ? saved.theme : nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
   lib.autoSave = saved.autoSave === true
   lib.autoSaveMinutes = clampMinutes(saved.autoSaveMinutes)
   lib.statusBar = normalizeStatusBar(saved.statusBar)
@@ -608,7 +753,7 @@ async function purgeArchive(lib: Library): Promise<void> {
   for (const entry of lib.archive) {
     if (live.has(entry.id)) continue
     if (now - entry.archivedAt >= ARCHIVE_MS) {
-      await fs.rm(join(assetsDir(), entry.id), { recursive: true, force: true })
+      await forgetClip(lib, entry)
       continue
     }
     kept.push(entry)
@@ -792,7 +937,7 @@ function normalizeArchive(input: unknown): ArchivedNote[] {
       ink: tab.ink,
       createdAt: tab.createdAt,
       archivedAt: finiteOr(entry.archivedAt, Date.now()),
-      kind: entry.kind === 'notes' || entry.kind === 'todo' ? entry.kind : 'tab'
+      kind: entry.kind === 'notes' || entry.kind === 'todo' || entry.kind === 'audio' ? entry.kind : 'tab'
     })
   }
   return notes

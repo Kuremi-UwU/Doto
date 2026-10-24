@@ -2,7 +2,7 @@ import { DOCK_IDS, type DockItemId, type DockLayout, type DockSide } from './typ
 
 export const DEFAULT_DOCK: DockLayout = {
   left: ['save', 'marker', 'search', 'frame'],
-  center: ['todo', 'notes', 'image', 'video'],
+  center: ['todo', 'notes', 'image', 'video', 'audio'],
   right: []
 }
 

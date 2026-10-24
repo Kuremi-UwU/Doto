@@ -248,6 +248,7 @@ function TabStrip(): React.JSX.Element {
       <button type="button" className="tab-new" aria-label="New tab" title="New tab" onClick={() => void createTab()}>
         <Plus size={16} />
       </button>
+      <div className="tabstrip__drag" aria-hidden="true" />
     </div>
   )
 }
@@ -417,6 +418,10 @@ function NoteTab({
   )
 }
 
+function deletedWhen(time: number): string {
+  return new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
 function notePreview(entry: { content: unknown; modules: Array<{ content: unknown; todos: Array<{ text: string }> }> }): string {
   const fromTodos = entry.modules.flatMap((module) => module.todos.map((todo) => todo.text)).filter(Boolean).join(', ')
   const text = plainText(entry.content) || entry.modules.map((module) => plainText(module.content)).find(Boolean) || fromTodos
@@ -482,7 +487,7 @@ function ArchiveButton(): React.JSX.Element {
         <div className="menu menu--end archive-menu" role="dialog" aria-label="Trash">
           <div className="menu__heading">Trash</div>
           <p className="archive-menu__hint">
-            Notes and to-do windows with something in them, and tabs that are not empty, stay here for {ARCHIVE_DAYS} days.
+            Notes, to-do windows, and voice notes stay here for {ARCHIVE_DAYS} days. You can restore them until then.
           </p>
           {archive.length > 0 && (
             <div className="archive-menu__toolbar">
@@ -509,14 +514,14 @@ function ArchiveButton(): React.JSX.Element {
             <div className="menu__scroll">
               {archive.map((entry) => {
                 const days = Math.max(0, Math.ceil((entry.archivedAt + ARCHIVE_DAYS * DAY_MS - Date.now()) / DAY_MS))
+                const kind = entry.kind === 'audio' ? 'Voice note' : entry.kind === 'todo' ? 'To-do' : entry.kind === 'notes' ? 'Notes' : entry.saveTitle
                 return (
                   <div key={entry.id} className="archive-item">
                     <div className="archive-item__text">
                       <span className="archive-item__title">{entry.title}</span>
                       {notePreview(entry) && <span className="archive-item__preview">{notePreview(entry)}</span>}
                       <span className="archive-item__meta">
-                        {entry.kind === 'todo' ? 'To-do' : entry.kind === 'notes' ? 'Notes' : entry.saveTitle} ·{' '}
-                        {days === 0 ? 'Deletes today' : days === 1 ? '1 day left' : `${days} days left`}
+                        {kind} · Deleted {deletedWhen(entry.archivedAt)} · {days === 0 ? 'Deletes today' : days === 1 ? '1 day left' : `${days} days left`}
                       </span>
                     </div>
                     <div className="archive-item__actions">
@@ -536,8 +541,8 @@ function ArchiveButton(): React.JSX.Element {
                         onClick={() => {
                           popover.close()
                           askConfirm({
-                            title: 'Delete this note?',
-                            message: `${entry.title} will be removed for good.`,
+                            title: entry.kind === 'audio' ? 'Delete this voice note?' : 'Delete this note?',
+                            message: entry.kind === 'audio' ? 'This recording will be removed for good.' : `${entry.title} will be removed for good.`,
                             confirmLabel: 'Delete',
                             run: () => void deleteArchived(entry.id)
                           })

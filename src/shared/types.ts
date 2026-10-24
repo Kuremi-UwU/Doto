@@ -1,4 +1,43 @@
-export type Theme = 'light' | 'dark'
+export const THEME_IDS = [
+  'light',
+  'dark',
+  'pink-light',
+  'pink-dark',
+  'cyan-light',
+  'cyan-dark',
+  'matcha-light',
+  'matcha-dark',
+  'lavender-light',
+  'lavender-dark',
+  'peach-light',
+  'peach-dark'
+] as const
+export type Theme = (typeof THEME_IDS)[number]
+
+export function isTheme(value: unknown): value is Theme {
+  return typeof value === 'string' && (THEME_IDS as readonly string[]).includes(value)
+}
+
+/** Window chrome and the app icon follow light or dark, including the pastel variants. */
+export function isDarkTheme(theme: Theme): boolean {
+  return theme === 'dark' || theme.endsWith('-dark')
+}
+
+/** Colors for the theme menu and the window title bar. */
+export const THEME_SWATCHES: Record<Theme, { label: string; ground: string; surface: string; text: string; accent: string; border: string }> = {
+  light: { label: 'Light', ground: '#f7f5f0', surface: '#ffffff', text: '#24231f', accent: '#4f63e7', border: '#e4e0d6' },
+  dark: { label: 'Dark', ground: '#17181a', surface: '#202124', text: '#e9e7e3', accent: '#8d9dff', border: '#313338' },
+  'pink-light': { label: 'Pastel Pink · Light', ground: '#fff8fa', surface: '#ffffff', text: '#3d2b33', accent: '#e0668f', border: '#f3d9e2' },
+  'pink-dark': { label: 'Pastel Pink · Dark', ground: '#1a1317', surface: '#251821', text: '#f6e6ec', accent: '#f28aae', border: '#3a2a33' },
+  'cyan-light': { label: 'Cyan · Light', ground: '#f5fcfd', surface: '#ffffff', text: '#1f3338', accent: '#1b8fa5', border: '#cfebf0' },
+  'cyan-dark': { label: 'Cyan · Dark', ground: '#0f1a1d', surface: '#162428', text: '#e4f6f9', accent: '#5cd3e6', border: '#264146' },
+  'matcha-light': { label: 'Matcha · Light', ground: '#f7faf2', surface: '#ffffff', text: '#2b3524', accent: '#6b9340', border: '#dce7cc' },
+  'matcha-dark': { label: 'Matcha · Dark', ground: '#161a10', surface: '#1c2517', text: '#eaf2df', accent: '#a6ce74', border: '#354228' },
+  'lavender-light': { label: 'Lavender · Light', ground: '#fafaff', surface: '#ffffff', text: '#2f2a40', accent: '#7b72d6', border: '#e3ddf5' },
+  'lavender-dark': { label: 'Lavender · Dark', ground: '#16131f', surface: '#1f1b2c', text: '#eeeafa', accent: '#b7a2f5', border: '#352f52' },
+  'peach-light': { label: 'Peach · Light', ground: '#fff9f5', surface: '#ffffff', text: '#3b2a22', accent: '#e0764a', border: '#f8dfd0' },
+  'peach-dark': { label: 'Peach · Dark', ground: '#1c1411', surface: '#271c17', text: '#fbede5', accent: '#f5a67e', border: '#4a342b' }
+}
 
 export const ARCHIVE_DAYS = 7
 
@@ -73,7 +112,7 @@ export interface Tab {
   updatedAt: number
 }
 
-export const DOCK_IDS = ['save', 'marker', 'search', 'frame', 'todo', 'notes', 'image', 'video'] as const
+export const DOCK_IDS = ['save', 'marker', 'search', 'frame', 'todo', 'notes', 'image', 'video', 'audio'] as const
 export type DockItemId = (typeof DOCK_IDS)[number]
 export type DockSide = 'left' | 'center' | 'right'
 
@@ -135,8 +174,8 @@ export interface ArchivedNote {
   modules: ModuleInstance[]
   color: ModuleColor
   ink: InkStroke[]
-  /** A closed tab, or a notes or to-do window that was closed. */
-  kind: 'tab' | ModuleKind
+  /** A closed tab, a notes or to-do window, or a voice note removed from the page. */
+  kind: 'tab' | ModuleKind | 'audio'
   createdAt: number
   archivedAt: number
 }
@@ -197,6 +236,8 @@ export interface DotoApi {
   archiveTab(id: string): Promise<Opened>
   /** Keeps a closed notes or to-do window in the trash. */
   trashModule(module: ModuleInstance): Promise<Library>
+  /** Copies a voice note into the trash. The file is removed from the note's folder. */
+  trashAudio(src: string): Promise<Library | null>
   restoreArchived(id: string): Promise<Opened>
   deleteArchived(id: string): Promise<Library>
   emptyTrash(): Promise<Library>
@@ -210,6 +251,8 @@ export interface DotoApi {
   pickImages(tabId: string): Promise<string[]>
   /** Opens a file picker and copies the chosen video into the tab's asset folder. */
   pickVideo(tabId: string): Promise<string | null>
+  /** Stores a recorded clip in the tab's asset folder and returns its asset URL. */
+  saveAudio(tabId: string, bytes: Uint8Array): Promise<string | null>
   /** Tells the main process this right-click already opened an editor menu. */
   claimEditorMenu(): void
   /** Ctrl+S is caught by the window, because the page never receives that key. */
